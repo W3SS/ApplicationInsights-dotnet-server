@@ -81,7 +81,6 @@
     <EmbeddedResource Include="..\WindowsServer.Nuget\ApplicationInsights.config.uninstall.xdt">
       <Link>ApplicationInsights.config.uninstall.xdt</Link>
     </EmbeddedResource>
-    <None Include="app.config" />
     <None Include="packages.config">
       <SubType>Designer</SubType>
     </None>
