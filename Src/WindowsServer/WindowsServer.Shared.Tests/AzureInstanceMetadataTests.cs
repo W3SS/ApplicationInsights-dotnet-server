@@ -6,6 +6,8 @@ namespace Microsoft.ApplicationInsights.WindowsServer
     using System.Net.Http;
     using System.Runtime.Serialization.Json;
     using System.Text;
+    using System.Net;
+    using System.Threading;
     using System.Threading.Tasks;
     using Microsoft.ApplicationInsights.WindowsServer.Implementation;
     using Microsoft.ApplicationInsights.WindowsServer.Implementation.DataContracts;
@@ -299,5 +301,85 @@ namespace Microsoft.ApplicationInsights.WindowsServer
                 Assert.True(false, "Expectation is that exceptions will be handled within AzureMetadataRequestor, not the calling code.");
             }
         }
+
+        [TestMethod]
+        public void SpoofedResponseFromAzureIMSDoesntCrash()
+        {
+            CancellationTokenSource cts = new CancellationTokenSource();
+
+            //string mockUri = AzureMetadataRequestor.baseImdsUrl + "/"; //}?{AzureMetadataRequestor.imdsTextFormat}&{AzureMetadataRequestor.imdsApiVersion}";
+            string mockUri = "http://localhost:9922/";
+
+            using (new LocalServer(mockUri, (HttpListenerContext context) =>
+            {
+                HttpListenerResponse response = context.Response;
+
+                // Construct a response.
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes("Name1" + Environment.NewLine);
+                response.ContentEncoding = System.Text.Encoding.UTF8;
+                // Get a response stream and write the response to it.
+                response.ContentLength64 = buffer.Length;
+                System.IO.Stream output = response.OutputStream;
+                output.Write(buffer, 0, buffer.Length);
+                output.Close();
+
+                context.Response.StatusCode = 200;
+            }))
+            {
+                var azIms = new AzureMetadataRequestor();
+                azIms.BaseAimsUri = mockUri;
+                var fields = azIms.GetAzureInstanceMetadataComputeFields();
+                fields.Wait();
+                List<string> values = new List<string>();
+                foreach (var iem in fields.Result)
+                {
+                    values.Add(iem);
+                }
+            }
+        }
+
+        class LocalServer : IDisposable
+        {
+            private readonly HttpListener listener;
+            private readonly CancellationTokenSource cts;
+
+            public LocalServer(string url, Action<HttpListenerContext> onRequest = null)
+            {
+                this.listener = new HttpListener();
+                this.listener.Prefixes.Add(url);
+                this.listener.Start();
+                this.cts = new CancellationTokenSource();
+
+                Task.Run(
+                    () =>
+                    {
+                        if (!this.cts.IsCancellationRequested)
+                        {
+                            HttpListenerContext context = this.listener.GetContext();
+                            if (onRequest != null)
+                            {
+                                onRequest(context);
+                            }
+                            else
+                            {
+                                context.Response.StatusCode = 200;
+                            }
+
+                            context.Response.OutputStream.Close();
+                            context.Response.Close();
+                        }
+                    },
+                    this.cts.Token);
+            }
+
+            public void Dispose()
+            {
+                this.cts.Cancel(false);
+                this.listener.Abort();
+                ((IDisposable)this.listener).Dispose();
+                this.cts.Dispose();
+            }
+        }
+
     }
 }
